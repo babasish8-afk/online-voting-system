@@ -1,0 +1,842 @@
+import customtkinter as ctk
+from tkinter import messagebox
+import os
+import hashlib
+import csv
+import random
+from datetime import datetime
+try:
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+    MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    MATPLOTLIB_AVAILABLE = False
+    
+try:
+    from PIL import Image
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
+
+# Configuration
+ctk.set_appearance_mode("Dark") # Force Dark mode for premium look
+ctk.set_default_color_theme("blue")
+
+# Custom Deep Theme Colors
+BG_COLOR = "#12101A"
+SIDEBAR_COLOR = "#1A1726"
+CARD_COLOR = "#231F33"
+ACCENT_COLOR = "#6C63FF"
+HOVER_COLOR = "#5B54E6"
+
+USERS_FILE = "users.txt"
+VOTES_FILE = "votes.txt"
+candidates = ["BJD", "BJP", "CONGRESS", "AAP"]
+
+# ---------- File Handling ----------
+
+def load_users():
+    users = {}
+    if os.path.exists(USERS_FILE):
+        with open(USERS_FILE, "r") as f:
+            for line in f:
+                if "," in line:
+                    u, p, v = line.strip().split(",")
+                    users[u] = {"password": p, "voted": v}
+    return users
+
+def save_users(users):
+    with open(USERS_FILE, "w") as f:
+        for u, d in users.items():
+            f.write(f"{u},{d['password']},{d['voted']}\n")
+
+def load_votes():
+    votes = {c: 0 for c in candidates}
+    if os.path.exists(VOTES_FILE):
+        with open(VOTES_FILE, "r") as f:
+            for line in f:
+                if "," in line:
+                    name, count = line.strip().split(",")
+                    votes[name] = int(count)
+    return votes
+
+def save_votes(votes):
+    with open(VOTES_FILE, "w") as f:
+        for name, count in votes.items():
+            f.write(f"{name},{count}\n")
+
+# ---------- Application Class ----------
+
+class VotingApp(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+        self.title("Secure Online Voting System")
+        self.geometry("900x650")
+        self.configure(fg_color=BG_COLOR)
+        
+        self.current_user = None
+        self.generated_otp = None
+        
+        # Load AI Images
+        self.logo_image = None
+        self.hero_image = None
+        if PIL_AVAILABLE:
+            try:
+                self.logo_image = ctk.CTkImage(Image.open(r"C:\Users\babas\.gemini\antigravity\brain\1f2c53bf-708e-479e-8883-2bf3166327a8\voting_logo_1777391825993.png"), size=(40, 40))
+                self.hero_image = ctk.CTkImage(Image.open(r"C:\Users\babas\.gemini\antigravity\brain\1f2c53bf-708e-479e-8883-2bf3166327a8\hero_illustration_1777391845263.png"), size=(350, 200))
+            except Exception as e:
+                print("Could not load images:", e)
+        
+        # Grid layout
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(1, weight=1)
+        
+        # --- Sidebar ---
+        self.sidebar_frame = ctk.CTkFrame(self, width=220, corner_radius=0, fg_color=SIDEBAR_COLOR)
+        self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
+        self.sidebar_frame.grid_rowconfigure(5, weight=1)
+        
+        # Logo
+        if self.logo_image:
+            self.logo_label = ctk.CTkLabel(self.sidebar_frame, text=" Voting Hub", image=self.logo_image, compound="left", font=ctk.CTkFont(size=24, weight="bold"))
+        else:
+            self.logo_label = ctk.CTkLabel(self.sidebar_frame, text="Voting Hub", font=ctk.CTkFont(size=24, weight="bold"))
+        self.logo_label.grid(row=0, column=0, padx=20, pady=(35, 30))
+        
+        # Navigation
+        self.btn_home = ctk.CTkButton(self.sidebar_frame, text="Home", fg_color="transparent", hover_color=CARD_COLOR, text_color="white", font=ctk.CTkFont(size=16), command=self.show_home)
+        self.btn_home.grid(row=1, column=0, padx=20, pady=5, sticky="ew")
+        
+        self.btn_admin = ctk.CTkButton(self.sidebar_frame, text="Admin Panel", fg_color="transparent", hover_color=CARD_COLOR, text_color="white", font=ctk.CTkFont(size=16), command=self.show_admin_login)
+        self.btn_admin.grid(row=2, column=0, padx=20, pady=5, sticky="ew")
+        
+        self.btn_logout = ctk.CTkButton(self.sidebar_frame, text="Logout", fg_color="#E91E63", hover_color="#C2185B", font=ctk.CTkFont(size=16, weight="bold"), command=self.logout)
+        self.btn_logout.grid(row=4, column=0, padx=20, pady=10, sticky="ew")
+        self.btn_logout.grid_remove() # Hidden initially
+        
+        self.btn_exit = ctk.CTkButton(self.sidebar_frame, text="Exit", fg_color="#332D45", hover_color="#1E1A29", font=ctk.CTkFont(size=16), command=self.quit)
+        self.btn_exit.grid(row=6, column=0, padx=20, pady=20, sticky="ew")
+        
+        # --- Main Content Area ---
+        self.main_frame = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
+        self.main_frame.grid(row=0, column=1, sticky="nsew")
+        self.main_frame.grid_rowconfigure(0, weight=1)
+        self.main_frame.grid_columnconfigure(0, weight=1)
+        
+        # --- Pages ---
+        self.pages = {}
+        for F in (HomePage, RegisterPage, LoginPage, OTPPage, VotingPage, AdminLoginPage, AdminDashboardPage):
+            page_name = F.__name__
+            frame = F(parent=self.main_frame, controller=self)
+            self.pages[page_name] = frame
+            frame.grid(row=0, column=0, sticky="nsew")
+            
+        self.show_home()
+        
+    def show_frame(self, page_name):
+        frame = self.pages[page_name]
+        if hasattr(frame, "on_show"):
+            frame.on_show()
+        frame.tkraise()
+        
+    def show_home(self):
+        self.btn_logout.grid_remove()
+        self.current_user = None
+        self.show_frame("HomePage")
+        
+    def show_admin_login(self):
+        self.btn_logout.grid_remove()
+        self.current_user = None
+        self.show_frame("AdminLoginPage")
+        
+    def logout(self):
+        self.show_home()
+        messagebox.showinfo("Logged Out", "You have been securely logged out.")
+
+# ---------- Pages ----------
+
+class HomePage(ctk.CTkFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, fg_color="transparent")
+        self.controller = controller
+        
+        card = ctk.CTkFrame(self, fg_color=CARD_COLOR, corner_radius=15)
+        card.place(relx=0.5, rely=0.5, anchor="center")
+        
+        if controller.hero_image:
+            ctk.CTkLabel(card, text="", image=controller.hero_image, corner_radius=15).pack(pady=(20, 10), padx=20)
+        
+        ctk.CTkLabel(card, text="Welcome to Online Voting", font=ctk.CTkFont(size=28, weight="bold")).pack(pady=(20, 10))
+        ctk.CTkLabel(card, text="Secure, Anonymous, Transparent.", text_color="gray", font=ctk.CTkFont(size=14)).pack(pady=(0, 20))
+        
+        btn_frame = ctk.CTkFrame(card, fg_color="transparent")
+        btn_frame.pack(pady=20)
+        
+        ctk.CTkButton(btn_frame, text="Login to Vote", font=ctk.CTkFont(size=16, weight="bold"), fg_color=ACCENT_COLOR, hover_color=HOVER_COLOR, width=180, height=45, command=lambda: controller.show_frame("LoginPage")).pack(side="left", padx=10)
+        ctk.CTkButton(btn_frame, text="Register", font=ctk.CTkFont(size=16, weight="bold"), fg_color="transparent", border_width=2, border_color=ACCENT_COLOR, hover_color="#312B47", width=180, height=45, command=lambda: controller.show_frame("RegisterPage")).pack(side="left", padx=10)
+
+class RegisterPage(ctk.CTkFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, fg_color="transparent")
+        self.controller = controller
+        
+        card = ctk.CTkFrame(self, fg_color=CARD_COLOR, corner_radius=15, width=450, height=450)
+        card.place(relx=0.5, rely=0.5, anchor="center")
+        card.pack_propagate(False)
+        
+        ctk.CTkLabel(card, text="Create Account", font=ctk.CTkFont(size=28, weight="bold")).pack(pady=(40, 10))
+        ctk.CTkLabel(card, text="Join the secure voting platform", text_color="gray").pack(pady=(0, 30))
+        
+        self.entry_user = ctk.CTkEntry(card, placeholder_text="Choose a Username", width=300, height=40, border_color="#433B61")
+        self.entry_user.pack(pady=10)
+        self.entry_pass = ctk.CTkEntry(card, placeholder_text="Create Password", show="*", width=300, height=40, border_color="#433B61")
+        self.entry_pass.pack(pady=10)
+        
+        ctk.CTkButton(card, text="Submit", font=ctk.CTkFont(size=16, weight="bold"), fg_color=ACCENT_COLOR, hover_color=HOVER_COLOR, width=300, height=45, command=self.register_user).pack(pady=(30, 10))
+        ctk.CTkButton(card, text="Back to Home", fg_color="transparent", text_color="gray", hover_color="#312B47", width=150, command=lambda: controller.show_frame("HomePage")).pack(pady=5)
+
+    def register_user(self):
+        u = self.entry_user.get()
+        p = self.entry_pass.get()
+        if not u or not p:
+            messagebox.showerror("Error", "Fields cannot be empty")
+            return
+            
+        users = load_users()
+        if u in users:
+            messagebox.showerror("Error", "User already exists!")
+        else:
+            hashed_p = hashlib.sha256(p.encode()).hexdigest()
+            users[u] = {"password": hashed_p, "voted": "no"}
+            save_users(users)
+            messagebox.showinfo("Success", "Registered Successfully! You can now log in.")
+            self.entry_user.delete(0, 'end')
+            self.entry_pass.delete(0, 'end')
+            self.controller.show_frame("LoginPage")
+
+class LoginPage(ctk.CTkFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, fg_color="transparent")
+        self.controller = controller
+        
+        card = ctk.CTkFrame(self, fg_color=CARD_COLOR, corner_radius=15, width=450, height=450)
+        card.place(relx=0.5, rely=0.5, anchor="center")
+        card.pack_propagate(False)
+        
+        ctk.CTkLabel(card, text="Welcome Back", font=ctk.CTkFont(size=28, weight="bold")).pack(pady=(40, 10))
+        ctk.CTkLabel(card, text="Enter your credentials to continue", text_color="gray").pack(pady=(0, 30))
+        
+        self.entry_user = ctk.CTkEntry(card, placeholder_text="Username", width=300, height=40, border_color="#433B61")
+        self.entry_user.pack(pady=10)
+        self.entry_pass = ctk.CTkEntry(card, placeholder_text="Password", show="*", width=300, height=40, border_color="#433B61")
+        self.entry_pass.pack(pady=10)
+        
+        ctk.CTkButton(card, text="Login", font=ctk.CTkFont(size=16, weight="bold"), fg_color=ACCENT_COLOR, hover_color=HOVER_COLOR, width=300, height=45, command=self.login_user).pack(pady=(30, 10))
+        ctk.CTkButton(card, text="Back", fg_color="transparent", text_color="gray", hover_color="#312B47", width=150, command=lambda: controller.show_frame("HomePage")).pack(pady=5)
+
+    def login_user(self):
+        u = self.entry_user.get()
+        p = self.entry_pass.get()
+        users = load_users()
+        if u in users:
+            hashed_p = hashlib.sha256(p.encode()).hexdigest()
+            if users[u]["password"] == hashed_p:
+                self.controller.current_user = u
+                self.entry_user.delete(0, 'end')
+                self.entry_pass.delete(0, 'end')
+                
+                # --- SIMULATE OTP SENDING ---
+                self.controller.generated_otp = str(random.randint(100000, 999999))
+                print("\n" + "="*50)
+                print(f"[SYSTEM MOCK EMAIL] OTP for {u}")
+                print(f"Your secret OTP code is: {self.controller.generated_otp}")
+                print("="*50 + "\n")
+                
+                messagebox.showinfo("OTP Sent", "An OTP code has been sent to your email! (Please check your VS Code Terminal/Console to view it)")
+                self.controller.show_frame("OTPPage")
+                return
+        messagebox.showerror("Error", "Invalid Credentials")
+
+class OTPPage(ctk.CTkFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, fg_color="transparent")
+        self.controller = controller
+        
+        card = ctk.CTkFrame(self, fg_color=CARD_COLOR, corner_radius=15, width=450, height=350)
+        card.place(relx=0.5, rely=0.5, anchor="center")
+        card.pack_propagate(False)
+        
+        ctk.CTkLabel(card, text="Two-Factor Auth", font=ctk.CTkFont(size=28, weight="bold")).pack(pady=(40, 10))
+        ctk.CTkLabel(card, text="Please enter the 6-digit OTP code", text_color="gray").pack(pady=5)
+        
+        self.entry_otp = ctk.CTkEntry(card, placeholder_text="123456", width=200, height=50, justify="center", font=ctk.CTkFont(size=24, weight="bold"), border_color="#433B61")
+        self.entry_otp.pack(pady=20)
+        
+        ctk.CTkButton(card, text="Verify Identity", font=ctk.CTkFont(size=16, weight="bold"), fg_color=ACCENT_COLOR, hover_color=HOVER_COLOR, width=200, height=45, command=self.verify_otp).pack(pady=10)
+        
+    def on_show(self):
+        self.entry_otp.delete(0, 'end')
+
+    def verify_otp(self):
+        if self.entry_otp.get() == self.controller.generated_otp:
+            messagebox.showinfo("Success", "Authentication Verified!")
+            self.controller.btn_logout.grid()
+            self.controller.show_frame("VotingPage")
+        else:
+            messagebox.showerror("Error", "Invalid OTP! Try again.")
+
+class VotingPage(ctk.CTkFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, fg_color="transparent")
+        self.controller = controller
+        
+        self.card = ctk.CTkFrame(self, fg_color=CARD_COLOR, corner_radius=15, width=600, height=500)
+        self.card.place(relx=0.5, rely=0.5, anchor="center")
+        self.card.pack_propagate(False)
+        
+        self.title_label = ctk.CTkLabel(self.card, text="Cast Your Vote", font=ctk.CTkFont(size=32, weight="bold"))
+        self.title_label.pack(pady=(40, 10))
+        ctk.CTkLabel(self.card, text="Select your preferred candidate below", text_color="gray").pack(pady=(0, 20))
+        
+        self.buttons_frame = ctk.CTkFrame(self.card, fg_color="transparent")
+        self.buttons_frame.pack(pady=10, fill="both", expand=True)
+
+    def on_show(self):
+        for widget in self.buttons_frame.winfo_children():
+            widget.destroy()
+            
+        u = self.controller.current_user
+        if not u: return
+        
+        users = load_users()
+        if users[u]["voted"] == "yes":
+            ctk.CTkLabel(self.buttons_frame, text="✅ You have already cast your vote!", font=ctk.CTkFont(size=24, weight="bold"), text_color="#4CAF50").pack(pady=100)
+        else:
+            for c in candidates:
+                btn = ctk.CTkButton(self.buttons_frame, text=c, height=60, width=300, font=ctk.CTkFont(size=20, weight="bold"), fg_color="transparent", border_width=2, border_color=ACCENT_COLOR, hover_color=HOVER_COLOR, command=lambda c=c: self.cast_vote(c))
+                btn.pack(pady=10)
+
+    def cast_vote(self, choice):
+        votes = load_votes()
+        users = load_users()
+        u = self.controller.current_user
+
+        votes[choice] += 1
+        users[u]["voted"] = "yes"
+        save_votes(votes)
+        save_users(users)
+
+        messagebox.showinfo("Success", f"Vote for {choice} Casted Successfully!")
+        self.on_show()
+
+class AdminLoginPage(ctk.CTkFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, fg_color="transparent")
+        self.controller = controller
+        
+        card = ctk.CTkFrame(self, fg_color=CARD_COLOR, corner_radius=15, width=400, height=350)
+        card.place(relx=0.5, rely=0.5, anchor="center")
+        card.pack_propagate(False)
+        
+        ctk.CTkLabel(card, text="Admin Portal", font=ctk.CTkFont(size=28, weight="bold")).pack(pady=(40, 10))
+        ctk.CTkLabel(card, text="Restricted Access", text_color="#E91E63").pack(pady=(0, 30))
+        
+        self.entry_pass = ctk.CTkEntry(card, placeholder_text="Admin Password", show="*", width=300, height=40, border_color="#E91E63")
+        self.entry_pass.pack(pady=20)
+        
+        ctk.CTkButton(card, text="Login", font=ctk.CTkFont(size=16, weight="bold"), fg_color="#E91E63", hover_color="#C2185B", width=300, height=45, command=self.check_admin).pack(pady=10)
+        ctk.CTkButton(card, text="Back", fg_color="transparent", text_color="gray", hover_color="#312B47", width=150, command=lambda: controller.show_frame("HomePage")).pack(pady=5)
+
+    def check_admin(self):
+        if self.entry_pass.get() == "admin123":
+            self.entry_pass.delete(0, 'end')
+            self.controller.btn_logout.grid()
+            self.controller.show_frame("AdminDashboardPage")
+        else:
+            messagebox.showerror("Error", "Access Denied: Wrong Password")
+
+class AdminDashboardPage(ctk.CTkFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, fg_color="transparent")
+        self.controller = controller
+        
+        self.header = ctk.CTkFrame(self, fg_color="transparent")
+        self.header.pack(fill="x", pady=20, padx=40)
+        
+        ctk.CTkLabel(self.header, text="Live Election Dashboard", font=ctk.CTkFont(size=32, weight="bold")).pack(side="left")
+        
+        btn_frame = ctk.CTkFrame(self.header, fg_color="transparent")
+        btn_frame.pack(side="right")
+        
+        ctk.CTkButton(btn_frame, text="Export CSV", font=ctk.CTkFont(size=14, weight="bold"), fg_color="#4CAF50", hover_color="#45a049", width=120, height=35, command=self.export_csv).pack(side="left", padx=5)
+        ctk.CTkButton(btn_frame, text="Reset Election", font=ctk.CTkFont(size=14, weight="bold"), fg_color="#E91E63", hover_color="#C2185B", width=120, height=35, command=self.reset_election).pack(side="left", padx=5)
+        
+        # Leader Card
+        self.leader_card = ctk.CTkFrame(self, fg_color=ACCENT_COLOR, corner_radius=10, height=60)
+        self.leader_card.pack(fill="x", padx=40, pady=10)
+        self.winner_label = ctk.CTkLabel(self.leader_card, text="Current Leader: TBD", font=ctk.CTkFont(size=20, weight="bold"), text_color="white")
+        self.winner_label.pack(pady=15)
+        
+        self.graph_frame = ctk.CTkFrame(self, fg_color=CARD_COLOR, corner_radius=15)
+        self.graph_frame.pack(fill="both", expand=True, padx=40, pady=20)
+
+    def on_show(self):
+        self.draw_graph()
+
+    def draw_graph(self):
+        for w in self.graph_frame.winfo_children():
+            w.destroy()
+            
+        votes = load_votes()
+        names = list(votes.keys())
+        counts = list(votes.values())
+        
+        if sum(counts) > 0:
+            max_votes = max(counts)
+            winners = [n for n, c in votes.items() if c == max_votes]
+            self.winner_label.configure(text=f"👑 Current Leader: {', '.join(winners)} ({max_votes} votes)")
+        else:
+            self.winner_label.configure(text="Waiting for votes...")
+
+        if MATPLOTLIB_AVAILABLE:
+            fig = Figure(figsize=(8, 5), dpi=100)
+            fig.patch.set_facecolor(CARD_COLOR)
+            ax = fig.add_subplot(111)
+            ax.set_facecolor(CARD_COLOR)
+            ax.tick_params(colors='white', labelsize=12)
+            ax.xaxis.label.set_color('white')
+            ax.yaxis.label.set_color('white')
+            ax.spines['bottom'].set_color('#433B61')
+            ax.spines['left'].set_color('#433B61')
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            
+            bars = ax.bar(names, counts, color=['#4CAF50', '#FF9800', '#2196F3', '#E91E63'], width=0.6)
+            ax.set_ylabel('Total Votes', fontsize=14)
+            
+            canvas = FigureCanvasTkAgg(fig, master=self.graph_frame)
+            canvas.draw()
+            canvas.get_tk_widget().pack(fill=ctk.BOTH, expand=True, padx=20, pady=20)
+        else:
+            ctk.CTkLabel(self.graph_frame, text="Matplotlib not installed.", text_color="orange").pack()
+            txt = "\n".join([f"{k}: {v} votes" for k, v in votes.items()])
+            ctk.CTkLabel(self.graph_frame, text=txt, font=ctk.CTkFont(size=20)).pack(pady=40)
+
+    def export_csv(self):
+        votes = load_votes()
+        filename = f"election_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        with open(filename, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(['Candidate', 'Votes'])
+            for n, c in votes.items():
+                writer.writerow([n, c])
+        messagebox.showinfo("Success", f"Results exported to {filename}")
+        
+    def reset_election(self):
+        if messagebox.askyesno("Warning", "Are you sure you want to wipe all votes and user statuses? This cannot be undone."):
+            empty_votes = {c: 0 for c in candidates}
+            save_votes(empty_votes)
+            
+            users = load_users()
+            for u in users:
+                users[u]["voted"] = "no"
+            save_users(users)
+            
+            messagebox.showinfo("Success", "Election data has been completely reset.")
+            self.on_show() 
+
+if __name__ == "__main__":
+    app = VotingApp()
+    app.mainloop()
+import random
+from datetime import datetime
+try:
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+    MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    MATPLOTLIB_AVAILABLE = False
+
+# Configuration
+ctk.set_appearance_mode("System")
+ctk.set_default_color_theme("blue")
+
+USERS_FILE = "users.txt"
+VOTES_FILE = "votes.txt"
+candidates = ["BJD", "BJP", "CONGRESS", "AAP"]
+
+# ---------- File Handling ----------
+
+def load_users():
+    users = {}
+    if os.path.exists(USERS_FILE):
+        with open(USERS_FILE, "r") as f:
+            for line in f:
+                if "," in line:
+                    u, p, v = line.strip().split(",")
+                    users[u] = {"password": p, "voted": v}
+    return users
+
+def save_users(users):
+    with open(USERS_FILE, "w") as f:
+        for u, d in users.items():
+            f.write(f"{u},{d['password']},{d['voted']}\n")
+
+def load_votes():
+    votes = {c: 0 for c in candidates}
+    if os.path.exists(VOTES_FILE):
+        with open(VOTES_FILE, "r") as f:
+            for line in f:
+                if "," in line:
+                    name, count = line.strip().split(",")
+                    votes[name] = int(count)
+    return votes
+
+def save_votes(votes):
+    with open(VOTES_FILE, "w") as f:
+        for name, count in votes.items():
+            f.write(f"{name},{count}\n")
+
+# ---------- Application Class ----------
+
+class VotingApp(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+        self.title("Online Voting System")
+        self.geometry("800x600")
+        
+        self.current_user = None
+        self.generated_otp = None
+        
+        # Grid layout (1 row, 2 columns)
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(1, weight=1)
+        
+        # --- Sidebar ---
+        self.sidebar_frame = ctk.CTkFrame(self, width=200, corner_radius=0)
+        self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
+        self.sidebar_frame.grid_rowconfigure(5, weight=1)
+        
+        self.logo_label = ctk.CTkLabel(self.sidebar_frame, text="Voting System", font=ctk.CTkFont(size=22, weight="bold"))
+        self.logo_label.grid(row=0, column=0, padx=20, pady=(30, 20))
+        
+        self.btn_home = ctk.CTkButton(self.sidebar_frame, text="Home", command=self.show_home)
+        self.btn_home.grid(row=1, column=0, padx=20, pady=10)
+        
+        self.btn_admin = ctk.CTkButton(self.sidebar_frame, text="Admin Panel", fg_color="#E91E63", hover_color="#C2185B", command=self.show_admin_login)
+        self.btn_admin.grid(row=2, column=0, padx=20, pady=10)
+        
+        self.btn_logout = ctk.CTkButton(self.sidebar_frame, text="Logout", fg_color="#FF9800", hover_color="#F57C00", command=self.logout)
+        self.btn_logout.grid(row=4, column=0, padx=20, pady=10)
+        self.btn_logout.grid_remove() # Hidden initially
+        
+        self.btn_exit = ctk.CTkButton(self.sidebar_frame, text="Exit", fg_color="gray", hover_color="darkgray", command=self.quit)
+        self.btn_exit.grid(row=6, column=0, padx=20, pady=20, sticky="s")
+        
+        # --- Main Content Area ---
+        self.main_frame = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
+        self.main_frame.grid(row=0, column=1, sticky="nsew")
+        self.main_frame.grid_rowconfigure(0, weight=1)
+        self.main_frame.grid_columnconfigure(0, weight=1)
+        
+        # --- Pages ---
+        self.pages = {}
+        for F in (HomePage, RegisterPage, LoginPage, OTPPage, VotingPage, AdminLoginPage, AdminDashboardPage):
+            page_name = F.__name__
+            frame = F(parent=self.main_frame, controller=self)
+            self.pages[page_name] = frame
+            frame.grid(row=0, column=0, sticky="nsew")
+            
+        self.show_home()
+        
+    def show_frame(self, page_name):
+        frame = self.pages[page_name]
+        if hasattr(frame, "on_show"):
+            frame.on_show()
+        frame.tkraise()
+        
+    def show_home(self):
+        self.btn_logout.grid_remove()
+        self.current_user = None
+        self.show_frame("HomePage")
+        
+    def show_admin_login(self):
+        self.btn_logout.grid_remove()
+        self.current_user = None
+        self.show_frame("AdminLoginPage")
+        
+    def logout(self):
+        self.show_home()
+        messagebox.showinfo("Logged Out", "You have been securely logged out.")
+
+# ---------- Pages ----------
+
+class HomePage(ctk.CTkFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, fg_color="transparent")
+        self.controller = controller
+        
+        card = ctk.CTkFrame(self, width=400, height=300)
+        card.place(relx=0.5, rely=0.5, anchor="center")
+        
+        ctk.CTkLabel(card, text="Welcome to Online Voting", font=ctk.CTkFont(size=26, weight="bold")).pack(pady=(40, 30))
+        
+        ctk.CTkButton(card, text="Login to Vote", font=ctk.CTkFont(size=16), width=200, height=40, command=lambda: controller.show_frame("LoginPage")).pack(pady=10)
+        ctk.CTkButton(card, text="Register New Account", font=ctk.CTkFont(size=16), width=200, height=40, command=lambda: controller.show_frame("RegisterPage")).pack(pady=10)
+
+class RegisterPage(ctk.CTkFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, fg_color="transparent")
+        self.controller = controller
+        
+        card = ctk.CTkFrame(self, width=400, height=350)
+        card.place(relx=0.5, rely=0.5, anchor="center")
+        
+        ctk.CTkLabel(card, text="Register", font=ctk.CTkFont(size=24, weight="bold")).pack(pady=(30, 20))
+        
+        self.entry_user = ctk.CTkEntry(card, placeholder_text="Username", width=250)
+        self.entry_user.pack(pady=10)
+        self.entry_pass = ctk.CTkEntry(card, placeholder_text="Password", show="*", width=250)
+        self.entry_pass.pack(pady=10)
+        
+        ctk.CTkButton(card, text="Submit", font=ctk.CTkFont(size=16), width=200, height=40, command=self.register_user).pack(pady=20)
+        ctk.CTkButton(card, text="Back", fg_color="transparent", border_width=1, width=100, command=lambda: controller.show_frame("HomePage")).pack(pady=5)
+
+    def register_user(self):
+        u = self.entry_user.get()
+        p = self.entry_pass.get()
+        if not u or not p:
+            messagebox.showerror("Error", "Fields cannot be empty")
+            return
+            
+        users = load_users()
+        if u in users:
+            messagebox.showerror("Error", "User already exists!")
+        else:
+            hashed_p = hashlib.sha256(p.encode()).hexdigest()
+            users[u] = {"password": hashed_p, "voted": "no"}
+            save_users(users)
+            messagebox.showinfo("Success", "Registered Successfully! You can now log in.")
+            self.entry_user.delete(0, 'end')
+            self.entry_pass.delete(0, 'end')
+            self.controller.show_frame("LoginPage")
+
+class LoginPage(ctk.CTkFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, fg_color="transparent")
+        self.controller = controller
+        
+        card = ctk.CTkFrame(self, width=400, height=350)
+        card.place(relx=0.5, rely=0.5, anchor="center")
+        
+        ctk.CTkLabel(card, text="User Login", font=ctk.CTkFont(size=24, weight="bold")).pack(pady=(30, 20))
+        
+        self.entry_user = ctk.CTkEntry(card, placeholder_text="Username", width=250)
+        self.entry_user.pack(pady=10)
+        self.entry_pass = ctk.CTkEntry(card, placeholder_text="Password", show="*", width=250)
+        self.entry_pass.pack(pady=10)
+        
+        ctk.CTkButton(card, text="Login", font=ctk.CTkFont(size=16), width=200, height=40, command=self.login_user).pack(pady=20)
+        ctk.CTkButton(card, text="Back", fg_color="transparent", border_width=1, width=100, command=lambda: controller.show_frame("HomePage")).pack(pady=5)
+
+    def login_user(self):
+        u = self.entry_user.get()
+        p = self.entry_pass.get()
+        users = load_users()
+        if u in users:
+            hashed_p = hashlib.sha256(p.encode()).hexdigest()
+            if users[u]["password"] == hashed_p:
+                self.controller.current_user = u
+                self.entry_user.delete(0, 'end')
+                self.entry_pass.delete(0, 'end')
+                
+                # --- SIMULATE OTP SENDING ---
+                self.controller.generated_otp = str(random.randint(100000, 999999))
+                print("\n" + "="*50)
+                print(f"[SYSTEM MOCK EMAIL] OTP for {u}")
+                print(f"Your secret OTP code is: {self.controller.generated_otp}")
+                print("="*50 + "\n")
+                
+                messagebox.showinfo("OTP Sent", "An OTP code has been sent to your email! (Please check your VS Code Terminal/Console to view it)")
+                self.controller.show_frame("OTPPage")
+                return
+        messagebox.showerror("Error", "Invalid Credentials")
+
+class OTPPage(ctk.CTkFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, fg_color="transparent")
+        self.controller = controller
+        
+        card = ctk.CTkFrame(self, width=400, height=300)
+        card.place(relx=0.5, rely=0.5, anchor="center")
+        
+        ctk.CTkLabel(card, text="Enter OTP", font=ctk.CTkFont(size=24, weight="bold")).pack(pady=(30, 10))
+        ctk.CTkLabel(card, text="Please enter the 6-digit OTP code", text_color="gray").pack(pady=5)
+        
+        self.entry_otp = ctk.CTkEntry(card, placeholder_text="123456", width=200, justify="center", font=ctk.CTkFont(size=20, weight="bold"))
+        self.entry_otp.pack(pady=20)
+        
+        ctk.CTkButton(card, text="Verify", font=ctk.CTkFont(size=16), width=200, height=40, command=self.verify_otp).pack(pady=10)
+        
+    def on_show(self):
+        self.entry_otp.delete(0, 'end')
+
+    def verify_otp(self):
+        if self.entry_otp.get() == self.controller.generated_otp:
+            messagebox.showinfo("Success", "Authentication Verified!")
+            self.controller.btn_logout.grid() # show logout button in sidebar
+            self.controller.show_frame("VotingPage")
+        else:
+            messagebox.showerror("Error", "Invalid OTP!")
+
+class VotingPage(ctk.CTkFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, fg_color="transparent")
+        self.controller = controller
+        
+        self.card = ctk.CTkFrame(self, width=500, height=500)
+        self.card.place(relx=0.5, rely=0.5, anchor="center")
+        
+        self.title_label = ctk.CTkLabel(self.card, text="Cast Your Vote", font=ctk.CTkFont(size=26, weight="bold"))
+        self.title_label.pack(pady=(30, 20))
+        
+        self.buttons_frame = ctk.CTkFrame(self.card, fg_color="transparent")
+        self.buttons_frame.pack(pady=10)
+
+    def on_show(self):
+        for widget in self.buttons_frame.winfo_children():
+            widget.destroy()
+            
+        u = self.controller.current_user
+        if not u: return
+        
+        users = load_users()
+        if users[u]["voted"] == "yes":
+            ctk.CTkLabel(self.buttons_frame, text="You have already cast your vote!", font=ctk.CTkFont(size=20, weight="bold"), text_color="red").pack(pady=30)
+        else:
+            for c in candidates:
+                ctk.CTkButton(self.buttons_frame, text=c, height=50, width=250, font=ctk.CTkFont(size=18), command=lambda c=c: self.cast_vote(c)).pack(pady=10)
+
+    def cast_vote(self, choice):
+        votes = load_votes()
+        users = load_users()
+        u = self.controller.current_user
+
+        votes[choice] += 1
+        users[u]["voted"] = "yes"
+        save_votes(votes)
+        save_users(users)
+
+        messagebox.showinfo("Success", "Vote Casted Successfully!")
+        self.on_show()
+
+class AdminLoginPage(ctk.CTkFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, fg_color="transparent")
+        self.controller = controller
+        
+        card = ctk.CTkFrame(self, width=400, height=300)
+        card.place(relx=0.5, rely=0.5, anchor="center")
+        
+        ctk.CTkLabel(card, text="Admin Login", font=ctk.CTkFont(size=24, weight="bold")).pack(pady=(30, 20))
+        
+        self.entry_pass = ctk.CTkEntry(card, placeholder_text="Admin Password", show="*", width=250)
+        self.entry_pass.pack(pady=20)
+        
+        ctk.CTkButton(card, text="Login", font=ctk.CTkFont(size=16), width=200, height=40, command=self.check_admin).pack(pady=10)
+        ctk.CTkButton(card, text="Back", fg_color="transparent", border_width=1, width=100, command=lambda: controller.show_frame("HomePage")).pack(pady=5)
+
+    def check_admin(self):
+        if self.entry_pass.get() == "admin123":
+            self.entry_pass.delete(0, 'end')
+            self.controller.btn_logout.grid()
+            self.controller.show_frame("AdminDashboardPage")
+        else:
+            messagebox.showerror("Error", "Wrong Password")
+
+class AdminDashboardPage(ctk.CTkFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, fg_color="transparent")
+        self.controller = controller
+        
+        self.header = ctk.CTkFrame(self, fg_color="transparent")
+        self.header.pack(fill="x", pady=20, padx=20)
+        
+        ctk.CTkLabel(self.header, text="Live Election Dashboard", font=ctk.CTkFont(size=28, weight="bold")).pack(side="left")
+        
+        btn_frame = ctk.CTkFrame(self.header, fg_color="transparent")
+        btn_frame.pack(side="right")
+        
+        ctk.CTkButton(btn_frame, text="Export CSV", font=ctk.CTkFont(size=14, weight="bold"), fg_color="#4CAF50", hover_color="#45a049", width=120, command=self.export_csv).pack(side="left", padx=5)
+        ctk.CTkButton(btn_frame, text="Reset Election", font=ctk.CTkFont(size=14, weight="bold"), fg_color="#E91E63", hover_color="#C2185B", width=120, command=self.reset_election).pack(side="left", padx=5)
+        
+        self.winner_label = ctk.CTkLabel(self, text="Current Leader: TBD", font=ctk.CTkFont(size=20, weight="bold"), text_color="orange")
+        self.winner_label.pack(pady=5)
+        
+        self.graph_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.graph_frame.pack(fill="both", expand=True, padx=20, pady=10)
+
+    def on_show(self):
+        self.draw_graph()
+
+    def draw_graph(self):
+        for w in self.graph_frame.winfo_children():
+            w.destroy()
+            
+        votes = load_votes()
+        names = list(votes.keys())
+        counts = list(votes.values())
+        
+        if sum(counts) > 0:
+            max_votes = max(counts)
+            winners = [n for n, c in votes.items() if c == max_votes]
+            self.winner_label.configure(text=f"Current Leader: {', '.join(winners)} ({max_votes} votes)")
+        else:
+            self.winner_label.configure(text="Current Leader: No votes cast yet")
+
+        if MATPLOTLIB_AVAILABLE:
+            fig = Figure(figsize=(6, 4), dpi=100)
+            fig.patch.set_facecolor('#2b2b2b')
+            ax = fig.add_subplot(111)
+            ax.set_facecolor('#2b2b2b')
+            ax.tick_params(colors='white')
+            ax.xaxis.label.set_color('white')
+            ax.yaxis.label.set_color('white')
+            
+            ax.bar(names, counts, color=['#4CAF50', '#FF9800', '#2196F3', '#E91E63'])
+            ax.set_ylabel('Votes')
+            
+            canvas = FigureCanvasTkAgg(fig, master=self.graph_frame)
+            canvas.draw()
+            canvas.get_tk_widget().pack(fill=ctk.BOTH, expand=True)
+        else:
+            ctk.CTkLabel(self.graph_frame, text="Matplotlib not installed.", text_color="orange").pack()
+            txt = "\n".join([f"{k}: {v} votes" for k, v in votes.items()])
+            ctk.CTkLabel(self.graph_frame, text=txt, font=ctk.CTkFont(size=18)).pack(pady=20)
+
+    def export_csv(self):
+        votes = load_votes()
+        filename = f"election_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        with open(filename, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(['Candidate', 'Votes'])
+            for n, c in votes.items():
+                writer.writerow([n, c])
+        messagebox.showinfo("Success", f"Results exported to {filename}")
+        
+    def reset_election(self):
+        if messagebox.askyesno("Warning", "Are you sure you want to wipe all votes and user statuses? This cannot be undone."):
+            empty_votes = {c: 0 for c in candidates}
+            save_votes(empty_votes)
+            
+            users = load_users()
+            for u in users:
+                users[u]["voted"] = "no"
+            save_users(users)
+            
+            messagebox.showinfo("Success", "Election data has been completely reset.")
+            self.on_show() 
+
+if __name__ == "__main__":
+    app = VotingApp()
+    app.mainloop()
